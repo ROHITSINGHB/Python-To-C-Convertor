@@ -1,0 +1,324 @@
+import sys
+import os
+import subprocess
+import tkinter as tk
+from tkinter import ttk, scrolledtext, messagebox
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from parser.parser import parse_tokens, generate_c_code, tokenize_output
+
+def compile_lexer():
+    lexer_file = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'lexer', 'python_lexer.l'))
+    if not os.path.exists(lexer_file):
+        messagebox.showerror("Error", f"Lexer file not found at: {lexer_file}")
+        sys.exit(1)
+    
+    lexer_output = os.path.join(os.path.dirname(lexer_file), "lex.yy.c")
+    exe_file = os.path.join(os.path.dirname(lexer_file), "lexer.exe")
+    
+    try:
+        if not os.path.exists(exe_file) or os.path.getmtime(lexer_file) > os.path.getmtime(exe_file):
+            print("Compiling lexer...")
+            subprocess.run(["flex", "-o", lexer_output, lexer_file], check=True)
+            subprocess.run(["gcc", lexer_output, "-o", exe_file], check=True)
+            print("Lexer compiled successfully.")
+    except FileNotFoundError as e:
+        messagebox.showerror("Error", f"Compilation failed: {e}\nEnsure Flex and GCC are installed.")
+        sys.exit(1)
+    except subprocess.CalledProcessError as e:
+        messagebox.showerror("Error", f"Failed to compile lexer: {e}")
+        sys.exit(1)
+
+def validate_input(input_code):
+    lines = input_code.splitlines()
+    for i, line in enumerate(lines, 1):
+        if '\t' in line:
+            messagebox.showerror("Input Error", f"Tab detected at line {i}. Use 4 spaces for indentation.")
+            return False
+        if any(ord(c) >= 128 for c in line):
+            messagebox.showerror("Input Error", f"Non-ASCII character detected at line {i}.")
+            return False
+    return True
+
+def process_code():
+    input_code = code_input.get("1.0", tk.END).strip()
+    if not input_code:
+        messagebox.showwarning("Input Error", "Please enter Python code.")
+        return
+
+    # Clean input
+    input_code = ''.join(c for c in input_code if ord(c) < 128)
+    input_code = input_code.replace('\r\n', '\n').replace('\r', '\n')
+    input_code = '\n'.join(line.rstrip() for line in input_code.splitlines())
+    if not input_code.endswith('\n'):
+        input_code += '\n'
+
+    # Save raw input before tab replacement
+    with open("raw_input.txt", "w", encoding="utf-8") as f:
+        f.write(input_code)
+    print("Raw input saved to raw_input.txt")
+
+    # Replace tabs
+    input_code = input_code.replace('\t', '    ')
+
+    # Validate input
+    if not validate_input(input_code):
+        return
+
+    # Save cleaned input
+    with open("input.txt", "w", encoding="utf-8") as f:
+        f.write(input_code)
+    print("Cleaned input saved to input.txt")
+
+    try:
+        lexer_exe = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'lexer', 'lexer.exe'))
+        result = subprocess.run([lexer_exe], input=input_code, text=True, capture_output=True)
+        if result.returncode != 0:
+            messagebox.showerror("Error", f"Lexer failed: {result.stderr}")
+            return
+        lexer_output = result.stdout
+        with open("lexer_output.txt", "w") as f:
+            f.write(lexer_output)
+        print("Lexer output saved to lexer_output.txt")
+        with open("raw_lexer_output.txt", "w") as f:
+            f.write(f"Raw lexer stdout:\n{lexer_output}\n")
+            if result.stderr:
+                f.write(f"Raw lexer stderr:\n{result.stderr}\n")
+        print("Raw lexer output saved to raw_lexer_output.txt")
+        tokens = tokenize_output(lexer_output)
+        with open("tokens.txt", "w") as f:
+            f.write("\n".join(tokens))
+        print("Tokens saved to tokens.txt")
+        parsed_statements = parse_tokens(tokens)
+        c_code = generate_c_code(parsed_statements)
+        output_box.delete("1.0", tk.END)
+        output_box.insert(tk.END, c_code)
+        
+        # Save C code to output file
+        os.makedirs(os.path.join(os.path.dirname(__file__), '..', 'output'), exist_ok=True)
+        output_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'output', 'result.c'))
+        with open(output_path, "w") as f:
+            f.write(c_code)
+        print(f"C code saved to {output_path}")
+    except FileNotFoundError:
+        messagebox.showerror("Error", "lexer.exe not found in lexer directory.")
+    except SyntaxError as e:
+        messagebox.showerror("Syntax Error", str(e))
+    except Exception as e:
+        messagebox.showerror("Error", f"Unexpected error: {e}")
+
+def save_c_code():
+    c_code = output_box.get("1.0", tk.END).strip()
+    if c_code:
+        try:
+            os.makedirs(os.path.join(os.path.dirname(__file__), '..', 'output'), exist_ok=True)
+            output_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'output', 'result.c'))
+            with open(output_path, "w") as f:
+                f.write(c_code)
+            messagebox.showinfo("Success", f"C code saved to {output_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save C code: {e}")
+    else:
+        messagebox.showwarning("Empty Output", "No C code to save.")
+
+def clear_text():
+    code_input.delete("1.0", tk.END)
+    output_box.delete("1.0", tk.END)
+
+# Basic syntax highlighting for Python input
+def highlight_syntax(event=None):
+    code_input.tag_remove("keyword", "1.0", tk.END)
+    code_input.tag_remove("string", "1.0", tk.END)
+    code = code_input.get("1.0", tk.END)
+    
+    # Keywords
+    keywords = ['if', 'else', 'for', 'in', 'range', 'print']
+    for kw in keywords:
+        start = "1.0"
+        while True:
+            pos = code_input.search(r'\b' + kw + r'\b', start, stopindex=tk.END, regexp=True)
+            if not pos:
+                break
+            end = f"{pos}+{len(kw)}c"
+            code_input.tag_add("keyword", pos, end)
+            start = end
+    
+    # Strings
+    import re
+    for match in re.finditer(r'"[^"]*"|\'[^\']*\'', code):
+        start_idx = f"1.0 + {match.start()} chars"
+        end_idx = f"1.0 + {match.end()} chars"
+        code_input.tag_add("string", start_idx, end_idx)
+
+# Initialize Tkinter window
+root = tk.Tk()
+root.title("Python to C Converter")
+root.geometry("1200x800")
+root.configure(bg="#F5F6F5")  # Light gray background
+
+# Style configuration
+style = ttk.Style()
+style.configure("TLabel", background="#F5F6F5", foreground="#333333", font=("Arial", 12))
+style.configure("TFrame", background="#F5F6F5")
+
+# Heading
+heading = tk.Label(
+    root,
+    text="Python to C Converter",
+    font=("Arial", 24, "bold"),
+    bg="#F5F6F5",
+    fg="#007BFF"  # Vibrant blue
+)
+heading.pack(pady=15)
+
+# Main frame
+main_frame = ttk.Frame(root, padding=10)
+main_frame.pack(fill="both", expand=True)
+
+# Input frame
+input_frame = ttk.Frame(main_frame, style="TFrame")
+input_frame.pack(side="left", fill="both", expand=True, padx=(0, 5))
+
+input_label = tk.Label(
+    input_frame,
+    text="Python Code",
+    font=("Arial", 12, "bold"),
+    bg="#F5F6F5",
+    fg="#333333"
+)
+input_label.pack(anchor="w", pady=(0, 5))
+
+code_input = scrolledtext.ScrolledText(
+    input_frame,
+    height=20,
+    width=50,
+    bg="#FFFFFF",
+    fg="#1A2526",
+    insertbackground="#333333",
+    font=("Consolas", 12),
+    wrap="word",
+    relief="flat",
+    borderwidth=1,
+    highlightthickness=1,
+    highlightbackground="#CED4DA"
+)
+code_input.pack(fill="both", expand=True)
+
+# Configure syntax highlighting tags
+code_input.tag_configure("keyword", foreground="#D73A49")  # Red for keywords
+code_input.tag_configure("string", foreground="#22863A")  # Green for strings
+
+# Bind syntax highlighting
+code_input.bind("<KeyRelease>", highlight_syntax)
+
+# Output frame
+output_frame = ttk.Frame(main_frame, style="TFrame")
+output_frame.pack(side="right", fill="both", expand=True, padx=(5, 0))
+
+output_label = tk.Label(
+    output_frame,
+    text="C Code",
+    font=("Arial", 12, "bold"),
+    bg="#F5F6F5",
+    fg="#333333"
+)
+output_label.pack(anchor="w", pady=(0, 5))
+
+output_box = scrolledtext.ScrolledText(
+    output_frame,
+    height=20,
+    width=50,
+    bg="#FFFFFF",
+    fg="#1A2526",
+    insertbackground="#333333",
+    font=("Consolas", 12),
+    wrap="word",
+    relief="flat",
+    borderwidth=1,
+    highlightthickness=1,
+    highlightbackground="#CED4DA"
+)
+output_box.pack(fill="both", expand=True)
+
+# Button frame
+button_frame = ttk.Frame(root, style="TFrame")
+button_frame.pack(pady=15, fill="x")
+
+# Convert button
+convert_button = tk.Button(
+    button_frame,
+    text="Convert to C",
+    command=process_code,
+    bg="#007BFF",
+    fg="#FFFFFF",
+    font=("Arial", 11, "bold"),
+    activebackground="#0056B3",
+    relief="flat",
+    cursor="hand2",
+    width=15,
+    padx=10,
+    pady=5
+)
+convert_button.pack(side="left", padx=10)
+
+# Save button
+save_button = tk.Button(
+    button_frame,
+    text="Save C Code",
+    command=save_c_code,
+    bg="#28A745",
+    fg="#FFFFFF",
+    font=("Arial", 11, "bold"),
+    activebackground="#218838",
+    relief="flat",
+    cursor="hand2",
+    width=15,
+    padx=10,
+    pady=5
+)
+save_button.pack(side="left", padx=10)
+
+# Clear button
+clear_button = tk.Button(
+    button_frame,
+    text="Clear",
+    command=clear_text,
+    bg="#DC3545",
+    fg="#FFFFFF",
+    font=("Arial", 11, "bold"),
+    activebackground="#C82333",
+    relief="flat",
+    cursor="hand2",
+    width=15,
+    padx=10,
+    pady=5
+)
+clear_button.pack(side="left", padx=10)
+
+# Project Makers
+makers_label = tk.Label(
+    root,
+    text="Project Makers: Rohit Singh, Narendra Singh Bisht, Bhomik Kandpal, Neeraj Bhardwaj",
+    font=("Arial", 11, "italic"),
+    bg="#F5F6F5",
+    fg="#555555",
+    wraplength=1100
+)
+makers_label.pack(pady=(10, 5))
+
+# Project Summary
+summary_label = tk.Label(
+    root,
+    text="This Python to C Converter transforms simple Python scripts into C code, supporting variables, conditionals, loops, and print statements. Built with Flex for lexical analysis and a custom parser for code generation, it provides a user-friendly interface for seamless code translation.",
+    font=("Arial", 10),
+    bg="#F5F6F5",
+    fg="#333333",
+    wraplength=1100,
+    justify="center"
+)
+summary_label.pack(pady=5)
+
+# Initial syntax highlight
+highlight_syntax()
+
+root.mainloop()
