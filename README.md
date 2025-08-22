@@ -52,8 +52,8 @@ A desktop application that translates a subset of Python code into C code, aimed
 
 Rohit Singh  
 Email: rohithitman9876@gmail.com  
-[LinkedIn](https://www.linkedin.com/in/rohithitman9876)  
-[GitHub](https://github.com/rohithitman9876)  
+[LinkedIn](https://www.linkedin.com/in/rohit-singh-27b77b263/)  
+[GitHub](https://github.com/ROHITSINGHB)  
 
 ## License
 
